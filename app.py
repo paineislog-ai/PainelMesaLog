@@ -20,7 +20,7 @@ st.set_page_config(page_title="Painel Mesa de Análise — LOG", layout="wide")
 st.title("🧮 Painel Mesa de Análise — LOG")
 
 # Cor padrão dos gráficos
-CHART_COLOR = "#730000"
+CHART_COLOR = "#234914"
 
 st.markdown(
     """
