@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # ============================================================
-# Painel Mesa de Análise — STARCHECK (multi-meses)
+# Painel Mesa de Análise — LOG (multi-meses)
 # Ajustes principais:
 # 1) Leituras do Google Sheets mais robustas (evita falhas do get_all_records)
 # 2) Filtros por Analista/Vistoriador passam a filtrar por OS (painel inteiro respeita)
@@ -21,8 +21,8 @@ from gspread.exceptions import APIError
 from oauth2client.service_account import ServiceAccountCredentials
 
 # ------------------ CONFIG BÁSICA ------------------
-st.set_page_config(page_title="Painel Mesa de Análise — STARCHECK", layout="wide")
-st.title("🧮 Painel Mesa de Análise — STARCHECK")
+st.set_page_config(page_title="Painel Mesa de Análise — LOG", layout="wide")
+st.title("🧮 Painel Mesa de Análise — LOG")
 
 # Cor padrão dos gráficos
 CHART_COLOR = "#234914"
