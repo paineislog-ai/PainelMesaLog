@@ -5,6 +5,8 @@
 # 1) Leituras do Google Sheets mais robustas (evita falhas do get_all_records)
 # 2) Filtros por Analista/Vistoriador passam a filtrar por OS (painel inteiro respeita)
 # 3) Contagens/participações por analista feitas por OS únicas (evita "não bate")
+# 4) DATA_BASE com fallback linha a linha:
+#    usa DATA_ABERTURA_MESA quando válida; se não, usa DATA_HORA_V6
 # ============================================================
 
 import os, json, re, unicodedata, time, random
@@ -76,6 +78,7 @@ def _upper(x):
 def parse_date_any(x):
     if pd.isna(x) or x == "":
         return pd.NaT
+
     # excel serial
     if isinstance(x, (int, float)) and not isinstance(x, bool):
         try:
@@ -83,21 +86,25 @@ def parse_date_any(x):
                     pd.to_timedelta(int(x), unit="D")).date()
         except Exception:
             pass
+
     s = str(x).strip()
+
     # tenta datetime com hora
     for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
         try:
             return datetime.strptime(s, fmt).date()
         except Exception:
             pass
+
     # tenta só data
     for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d/%m/%y"):
         try:
             return datetime.strptime(s, fmt).date()
         except Exception:
             pass
+
     try:
-        return pd.to_datetime(s).date()
+        return pd.to_datetime(s, dayfirst=True).date()
     except Exception:
         return pd.NaT
 
@@ -310,15 +317,17 @@ def read_producao_month(sheet_id: str) -> Tuple[pd.DataFrame, str]:
     rename = {}
     for c in df.columns:
         cu = _strip_accents(c).upper()
+        cu_nospace = cu.replace(" ", "")
+
         if "ORDEM" in cu and "SERVICO" in cu:
             rename[c] = "OS"
         elif cu == "PLACA":
             rename[c] = "PLACA"
-        elif "DATA/HORA V6".replace("/", "") in cu.replace(" ", "") or "DATAHORA" in cu:
+        elif "DATA/HORAV6" in cu_nospace or "DATAHORA" in cu_nospace:
             rename[c] = "DATA_HORA_V6"
-        elif "DATA ABERTURA" in cu and "MESA" in cu:
+        elif "DATA" in cu and "ABERTURA" in cu and "MESA" in cu:
             rename[c] = "DATA_ABERTURA_MESA"
-        elif "HORA ABERTURA" in cu and "MESA" in cu:
+        elif "HORA" in cu and "ABERTURA" in cu and "MESA" in cu:
             rename[c] = "HORA_ABERTURA_MESA"
         elif "STATUS" in cu and "LAUDO" in cu:
             rename[c] = "STATUS_LAUDO"
@@ -332,16 +341,23 @@ def read_producao_month(sheet_id: str) -> Tuple[pd.DataFrame, str]:
     df = df.rename(columns=rename)
 
     for need in [
-        "OS","PLACA","DATA_HORA_V6","DATA_ABERTURA_MESA","HORA_ABERTURA_MESA",
-        "STATUS_LAUDO","TIPO_USUARIO","USUARIO","TEMPO_TOTAL"
+        "OS", "PLACA", "DATA_HORA_V6", "DATA_ABERTURA_MESA", "HORA_ABERTURA_MESA",
+        "STATUS_LAUDO", "TIPO_USUARIO", "USUARIO", "TEMPO_TOTAL"
     ]:
         if need not in df.columns:
             df[need] = ""
 
-    if df["DATA_ABERTURA_MESA"].astype(str).str.strip().ne("").any():
-        df["DATA_BASE"] = df["DATA_ABERTURA_MESA"].apply(parse_date_any)
-    else:
-        df["DATA_BASE"] = df["DATA_HORA_V6"].apply(parse_date_any)
+    # ------------------ AJUSTE PRINCIPAL ------------------
+    # Fallback linha a linha:
+    # 1) tenta DATA_ABERTURA_MESA
+    # 2) se vier vazia/inválida, usa DATA_HORA_V6
+    data_abertura = df["DATA_ABERTURA_MESA"].apply(parse_date_any)
+    data_v6 = df["DATA_HORA_V6"].apply(parse_date_any)
+
+    df["DATA_BASE"] = data_abertura
+    mask_faltante = pd.isna(df["DATA_BASE"])
+    df.loc[mask_faltante, "DATA_BASE"] = data_v6[mask_faltante]
+    # ------------------------------------------------------
 
     df["OS"] = df["OS"].astype(str).str.strip()
     df["PLACA"] = df["PLACA"].astype(str).str.strip()
@@ -383,7 +399,7 @@ def read_critica_month(sheet_id: str) -> Tuple[pd.DataFrame, str]:
 
     df = df.rename(columns=rename)
 
-    for need in ["OS","PLACA","VISTORIADOR","ANALISTA","STATUS_CRITICA","DATA_CRITICA","OBS"]:
+    for need in ["OS", "PLACA", "VISTORIADOR", "ANALISTA", "STATUS_CRITICA", "DATA_CRITICA", "OBS"]:
         if need not in df.columns:
             df[need] = ""
 
@@ -402,10 +418,10 @@ idx_crit = read_index(ANALISTAS_INDEX_ID, tab="CRÍTICA")
 
 if "ATIVO" in idx_prod.columns:
     idx_prod["ATIVO"] = idx_prod["ATIVO"].astype(str).map(_upper)
-    idx_prod = idx_prod[idx_prod["ATIVO"].isin(["S","SIM","1","Y","YES"])]
+    idx_prod = idx_prod[idx_prod["ATIVO"].isin(["S", "SIM", "1", "Y", "YES"])]
 if "ATIVO" in idx_crit.columns:
     idx_crit["ATIVO"] = idx_crit["ATIVO"].astype(str).map(_upper)
-    idx_crit = idx_crit[idx_crit["ATIVO"].isin(["S","SIM","1","Y","YES"])]
+    idx_crit = idx_crit[idx_crit["ATIVO"].isin(["S", "SIM", "1", "Y", "YES"])]
 
 sel_meses = sorted([str(m).strip() for m in idx_prod["MÊS"] if str(m).strip()])
 if not sel_meses:
@@ -448,7 +464,7 @@ dfProd = pd.concat(prod_all, ignore_index=True)
 dfCrit = (
     pd.concat(crit_all, ignore_index=True)
     if crit_all
-    else pd.DataFrame(columns=["OS","PLACA","VISTORIADOR","ANALISTA","STATUS_CRITICA","DATA_CRITICA","OBS"])
+    else pd.DataFrame(columns=["OS", "PLACA", "VISTORIADOR", "ANALISTA", "STATUS_CRITICA", "DATA_CRITICA", "OBS"])
 )
 
 # ------------------ FILTRO DE MÊS E PERÍODO ------------------
@@ -468,7 +484,13 @@ mask_mes = s_all_dt.dt.year.eq(ref_year) & s_all_dt.dt.month.eq(ref_month)
 dfProd_mes = dfProd[mask_mes].copy()
 
 s_mes_dates = pd.to_datetime(dfProd_mes["DATA_BASE"], errors="coerce").dt.date
-min_d, max_d = min(s_mes_dates.dropna()), max(s_mes_dates.dropna())
+datas_validas = s_mes_dates.dropna()
+
+if datas_validas.empty:
+    st.error("Não há datas válidas para o mês selecionado.")
+    st.stop()
+
+min_d, max_d = min(datas_validas), max(datas_validas)
 
 col1, col2 = st.columns([1.2, 2.8])
 with col1:
@@ -512,7 +534,7 @@ with col2:
         f_vists = st.multiselect("Vistoriadores (opcional)", vist_opts)
 
 # --- FILTROS POR OS (painel inteiro respeita) ---
-os_keep = None  # vira set() quando algum filtro estiver ativo
+os_keep = None
 
 if f_analistas:
     ups_a = [_upper(a) for a in f_analistas]
@@ -907,7 +929,7 @@ if not fast_mode:
         hist_prod = hist_prod.sort_values(["DATA_BASE", "OS", "TIPO_USUARIO"])
 
         st.subheader("Histórico de produção da placa")
-        cols = ["DATA_BASE","OS","PLACA","TIPO_USUARIO","USUARIO","STATUS_LAUDO","TEMPO_TOTAL"]
+        cols = ["DATA_BASE", "OS", "PLACA", "TIPO_USUARIO", "USUARIO", "STATUS_LAUDO", "TEMPO_TOTAL"]
         for c in cols:
             if c not in hist_prod.columns:
                 hist_prod[c] = ""
@@ -923,7 +945,7 @@ if not fast_mode:
             hist_crit = viewCrit[viewCrit["PLACA"] == _upper(sel_placa)].copy()
             if not hist_crit.empty:
                 st.subheader("Críticas relacionadas à placa")
-                cols_c = ["DATA_CRITICA","OS","PLACA","VISTORIADOR","ANALISTA","STATUS_CRITICA","OBS"]
+                cols_c = ["DATA_CRITICA", "OS", "PLACA", "VISTORIADOR", "ANALISTA", "STATUS_CRITICA", "OBS"]
                 for c in cols_c:
                     if c not in hist_crit.columns:
                         hist_crit[c] = ""
@@ -944,11 +966,11 @@ if not fast_mode:
 
     det = viewProd.copy()
     det["DATA_BASE"] = pd.to_datetime(det["DATA_BASE"], errors="coerce").dt.date
-    cols = ["DATA_BASE","OS","PLACA","TIPO_USUARIO","USUARIO","STATUS_LAUDO","TEMPO_TOTAL"]
+    cols = ["DATA_BASE", "OS", "PLACA", "TIPO_USUARIO", "USUARIO", "STATUS_LAUDO", "TEMPO_TOTAL"]
     for c in cols:
         if c not in det.columns:
             det[c] = ""
-    det = det[cols].sort_values(["DATA_BASE","OS","TIPO_USUARIO"]).rename(columns={
+    det = det[cols].sort_values(["DATA_BASE", "OS", "TIPO_USUARIO"]).rename(columns={
         "DATA_BASE": "DATA",
         "TIPO_USUARIO": "TIPO USUÁRIO",
         "STATUS_LAUDO": "STATUS LAUDO",
@@ -964,11 +986,11 @@ if not fast_mode:
     if detc_base.empty:
         st.info("Sem críticas para mostrar no recorte atual.")
     else:
-        cols_c = ["DATA_CRITICA","OS","PLACA","VISTORIADOR","ANALISTA","STATUS_CRITICA","OBS"]
+        cols_c = ["DATA_CRITICA", "OS", "PLACA", "VISTORIADOR", "ANALISTA", "STATUS_CRITICA", "OBS"]
         for c in cols_c:
             if c not in detc_base.columns:
                 detc_base[c] = ""
-        detc = detc_base[cols_c].sort_values(["DATA_CRITICA","ANALISTA","VISTORIADOR"]).rename(columns={
+        detc = detc_base[cols_c].sort_values(["DATA_CRITICA", "ANALISTA", "VISTORIADOR"]).rename(columns={
             "DATA_CRITICA": "DATA CRÍTICA",
             "STATUS_CRITICA": "STATUS CRÍTICA",
             "OBS": "OBSERVAÇÃO",
